@@ -1,0 +1,1244 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZSDI_EINV_EINVOICE_JSON
+*&---------------------------------------------------------------------*
+form fill_json.
+  clear: wa_doc , total_discount_amount,taxtot-amount , wa_doc_export.
+  perform get_issuer.
+  perform get_receiver.
+  perform get_docdata.
+  perform get_delivery.
+
+  perform move_to_export_doc.  "" new perform to move doc to export doc  " 10.7.2023
+
+  perform get_iline.
+*  PERFORM GET_DELIVERY.
+  perform data_to_json.
+*  PERFORM ADJUST_JSON.
+endform.
+
+form get_issuer.
+
+  select single country city1 city2 street building post_code1 floor roomnumber name1
+    from t001
+    inner join adrc
+    on ( t001~adrnr = adrc~addrnumber )
+    into ( wa_doc-issuer-address-country , wa_doc-issuer-address-governate ,
+    wa_doc-issuer-address-region_city , wa_doc-issuer-address-street ,
+    wa_doc-issuer-address-building_number , wa_doc-issuer-address-postal_code ,
+    wa_doc-issuer-address-floor , wa_doc-issuer-address-room ,
+    wa_doc-issuer-name )
+    where t001~bukrs eq wa-bukrs and adrc~date_from le sy-datum and adrc~date_to ge sy-datum and nation ne 'A' .
+
+  select single value
+    into wa_doc-issuer-id
+    from zsd_einv_setting
+    where bukrs = wa-bukrs and key_code = '05'.
+  wa_doc-issuer-type = 'B'.
+  wa_doc-issuer-address-branch_id = '0'.
+*  WA_DOC-ISSUER-NAME = 'Ideal Company'.
+  wa_doc-issuer-name = 'ايديال ستاندر انترناشيونال ايجيبت لانتاج الادوات الصحي'.
+  if wa_doc-issuer-address-region_city is initial.
+    wa_doc-issuer-address-region_city = null.
+  endif.
+**********     get receiver EMPTY FIELDS .
+  if wa_doc-issuer-address-country is initial .
+    wa_doc-issuer-address-country = 'EG'.
+  endif.
+  if wa_doc-issuer-address-governate is initial .
+    wa_doc-issuer-address-governate = null.
+  endif.
+  if wa_doc-issuer-address-region_city is initial .
+    wa_doc-issuer-address-region_city = null.
+  endif.
+  if wa_doc-issuer-address-street is initial .
+    wa_doc-issuer-address-street = null.
+  endif.
+  if wa_doc-issuer-address-building_number is initial .
+    wa_doc-issuer-address-building_number = null.
+  endif.
+  if wa_doc-issuer-address-floor is initial .
+    wa_doc-issuer-address-floor = null.
+  endif.
+
+endform.
+
+form get_receiver.
+  " CHECK VALUE OF BILLING
+  select single netwr into @data(net) from vbrk where vbeln = @wa-vbeln.
+  clear : l_netwr_ch.
+  l_netwr_ch = net.
+  select single kna1~land1 , ort01 , kna1~regio , stras , pstlz , building , floor , roomnumber , tvzbt~vtext , kna1~name1 , vbrk~netwr
+*    ,TAXNUM, taxtype " commented by mosbah 4-12-2022
+      , stcd1
+    , ktokd " Added 7-12-2022
+      "IDNUMBER
+    from vbrk
+    inner join kna1
+    on ( vbrk~kunrg eq kna1~kunnr )
+    inner join adrc
+    on ( kna1~adrnr eq adrc~addrnumber )
+    inner join tvzbt
+    on ( vbrk~zterm eq tvzbt~zterm )
+*    LEFT OUTER JOIN BUT0ID
+*    ON ( BUT0ID~PARTNER = VBRK~KUNRG AND ( BUT0ID~TYPE = 'EG2' OR BUT0ID~TYPE = 'EG3' ) )
+
+*    LEFT JOIN DFKKBPTAXNUM ON ( DFKKBPTAXNUM~PARTNER = VBRK~KUNRG AND (  DFKKBPTAXNUM~TAXTYPE = 'EG1' "DFKKBPTAXNUM~TAXTYPE = 'EG2' OR
+*    OR DFKKBPTAXNUM~TAXTYPE = 'EG0' ) ) " " commented by mosbah 4-12-2022
+
+    into (
+    @wa_doc-receiver-address-country , @wa_doc-receiver-address-governate ,
+    @wa_doc-receiver-address-region_city , @wa_doc-receiver-address-street ,
+    @wa_doc-receiver-address-postal_code , @wa_doc-receiver-address-building_number ,
+    @wa_doc-receiver-address-floor , @wa_doc-receiver-address-room ,
+    @wa_doc-payment-terms , @wa_doc-receiver-name , @netwr , @wa_doc-receiver-id ,@wa-type )
+*    @WA_DOC-PAYMENT-TERMS , @WA_DOC-RECEIVER-NAME , @NETWR , @WA_DOC-RECEIVER-ID  )
+    where vbrk~vbeln eq @wa-vbeln .
+
+*  IF WA-TYPE = 'EG2' . " commented by mosbah 4-12-2022
+*    WA_DOC-RECEIVER-TYPE = 'B'.
+*  ELSEIF  WA-TYPE = 'EG0'.
+*     WA_DOC-RECEIVER-TYPE = 'B'.
+*  ELSEIF WA-TYPE = 'EG1'.
+*    WA_DOC-RECEIVER-TYPE = 'P'.
+*  ENDIF.
+*  WA_DOC-RECEIVER-TYPE = 'B'. " added by mosbah 4-12-2022
+
+
+  clear: l_vbelv_temp, l_kunnr_temp  , ls_cust_numbers-type. " 17-12-2022
+*SELECT SINGLE VBELV FROM VBFA INTO wa-VBELV  WHERE VBELN = wa-VBELN  and VBTYP_N = 'M' and VBTYP_V = 'C'. " 17-12-2022
+  select single vbelv from vbfa into wa-vbelv  where vbeln = wa-vbeln
+    and ( ( vbtyp_n = 'M' and vbtyp_v = 'C' ) or
+          ( vbtyp_n = 'O' and vbtyp_v = 'H' ) or
+          ( vbtyp_n = 'P' and vbtyp_v = 'N' ) or
+          ( vbtyp_n = 'O' and vbtyp_v = 'K' ) or
+          ( vbtyp_n = '5' and vbtyp_v = 'C' ) or
+          ( vbtyp_n = 'M' and vbtyp_v = 'I' ) or
+          ( vbtyp_n = 'P' and vbtyp_v = 'L' ) or
+          ( vbtyp_n = 'O' and vbtyp_v = 'M' )
+        ).  " 09-01-2023
+  select single kunnr from vbpa into l_kunnr_temp  where vbeln = wa-vbelv and parvw = 'WE'. " 17-12-2022
+
+  """""""""""""""""""""""""""""""""""""""""""""""""""""""
+  if l_kunnr_temp is initial. " MM
+    select  single vbelv
+     from vbfa
+     into wa-vbelv
+     where vbtyp_n = '5' and vbtyp_v = 'J' and  vbeln = wa-vbeln.
+
+    select single kunnr
+     from likp
+     into l_kunnr_temp
+     where vbeln = wa-vbelv.
+  endif.
+  """"""""""""""""""""""""""""""""""""""""""""""""""""""
+
+*-----------------------------------09-01-2023---------------------------------*
+*  SELECT SINGLE KTOKD FROM KNA1 INTO WA-TYPE     WHERE KUNNR = L_KUNNR_TEMP . " 17-12-2022
+
+  select single type from zsd_cust_numbers into ls_cust_numbers-type where cust_num = l_kunnr_temp.
+  wa_doc-receiver-type = ls_cust_numbers-type.
+  if wa_doc-receiver-type is not initial .
+
+    clear : l_vbelv_temp,l_adrnr_temp,wa_doc-receiver-id,
+        wa_doc-receiver-address-country , wa_doc-receiver-address-governate ,
+        wa_doc-receiver-address-region_city , wa_doc-receiver-address-street ,
+        wa_doc-receiver-address-postal_code , wa_doc-receiver-address-building_number ,
+        wa_doc-receiver-address-floor , wa_doc-receiver-address-room  , wa_doc-receiver-name
+  .
+    select single stcd1 from vbpa3 into wa_doc-receiver-id where vbeln =  wa-vbelv and  parvw = 'WE' .
+
+    select single adrnr from vbpa into l_adrnr_temp where vbeln = wa-vbelv and parvw = 'WE'.
+
+    select single  country , city1 , region , street , post_code1 , building , floor , roomnumber , name1
+      from adrc into ( @wa_doc-receiver-address-country , @wa_doc-receiver-address-governate ,
+        @wa_doc-receiver-address-region_city , @wa_doc-receiver-address-street ,
+        @wa_doc-receiver-address-postal_code , @wa_doc-receiver-address-building_number ,
+        @wa_doc-receiver-address-floor , @wa_doc-receiver-address-room  , @wa_doc-receiver-name ) where addrnumber = @l_adrnr_temp.
+
+    """"""""""""""""""""
+  elseif wa-vtweg = '35' and l_kunnr_temp <> 'DFZA' and  l_kunnr_temp is not initial.
+    clear :
+        wa_doc-receiver-address-country , wa_doc-receiver-address-governate ,
+        wa_doc-receiver-address-region_city , wa_doc-receiver-address-street ,
+        wa_doc-receiver-address-postal_code , wa_doc-receiver-address-building_number ,
+        wa_doc-receiver-address-floor , wa_doc-receiver-address-room , wa_doc-receiver-name  , wa_doc-receiver-id ,wa-type .
+
+    select single kna1~land1 , ort01 , kna1~regio , stras , pstlz , adrc~building , adrc~floor , adrc~roomnumber , kna1~name1 , stcd1, ktokd
+     from kna1
+     inner join adrc
+     on ( kna1~adrnr eq adrc~addrnumber )
+     into (  @wa_doc-receiver-address-country , @wa_doc-receiver-address-governate ,
+             @wa_doc-receiver-address-region_city , @wa_doc-receiver-address-street ,
+             @wa_doc-receiver-address-postal_code , @wa_doc-receiver-address-building_number ,
+             @wa_doc-receiver-address-floor , @wa_doc-receiver-address-room , @wa_doc-receiver-name  , @wa_doc-receiver-id ,@wa-type )
+     where  kna1~kunnr = @l_kunnr_temp  .
+
+    wa_doc-receiver-type = 'F'.
+    if wa_doc-receiver-id is initial.
+      wa_doc-receiver-id = '999999999'.
+    endif.
+    """"""""""""""""""""
+  elseif wa-vtweg = '10' .
+
+
+
+    wa_doc-receiver-type = 'F'.
+    if wa_doc-receiver-id is initial.
+      wa_doc-receiver-id = '999999999'.
+    endif.
+
+  else.
+
+
+    wa_doc-receiver-type = 'B'.
+
+  endif.
+
+
+*-----------------------------------09-01-2023---------------------------------*
+  replace all occurrences of '-' in wa_doc-receiver-id with ''.
+  replace all occurrences of '/' in wa_doc-receiver-id with ''.
+  replace all occurrences of '\' in wa_doc-receiver-id with ''.
+  replace all occurrences of '.' in wa_doc-receiver-id with ''.
+  replace all occurrences of ',' in wa_doc-receiver-id with ''.
+  replace all occurrences of '_' in wa_doc-receiver-id with ''.
+
+
+
+
+  """""""""""""""""" " Added 7-12-2022 """""""""""""""
+*
+*  IF WA-TYPE = 'IGEN' .
+*    WA_DOC-RECEIVER-TYPE = 'B'.
+*  ELSEIF  WA-TYPE = 'IONE'.
+**     WA_DOC-RECEIVER-TYPE = 'P'.
+*
+**SELECT SINGLE type FROM ZSD_CUST_NUMBERS INTO Ls_cust_numbers-type WHERE CUST_NUM = L_KUNNR_temp.
+**WA_DOC-RECEIVER-TYPE = Ls_cust_numbers-type.
+**IF WA_DOC-RECEIVER-TYPE is INITIAL .
+**    MESSAGE 'Make sure of the customer type'  TYPE 'I' .
+**ENDIF.
+*
+*
+*CLEAR : L_vbelv_temp,L_ADRNR_temp,WA_DOC-RECEIVER-ID,
+*        WA_DOC-RECEIVER-ADDRESS-COUNTRY , WA_DOC-RECEIVER-ADDRESS-GOVERNATE ,
+*        WA_DOC-RECEIVER-ADDRESS-REGION_CITY , WA_DOC-RECEIVER-ADDRESS-STREET ,
+*        WA_DOC-RECEIVER-ADDRESS-POSTAL_CODE , WA_DOC-RECEIVER-ADDRESS-BUILDING_NUMBER ,
+*        WA_DOC-RECEIVER-ADDRESS-FLOOR , WA_DOC-RECEIVER-ADDRESS-ROOM  , WA_DOC-RECEIVER-NAME
+*  .
+**SELECT SINGLE VBELV FROM VBFA INTO L_vbelv_temp  WHERE VBELN = wa-VBELN and VBTYP_N = 'M' and VBTYP_V = 'C'.
+**SELECT SINGLE STCD1 FROM VBPA3 INTO WA_DOC-RECEIVER-ID WHERE VBELN =  L_vbelv_temp and  PARVW in  ( 'PY' , 'SH' ).
+**SELECT SINGLE STCD1 FROM VBPA3 INTO WA_DOC-RECEIVER-ID WHERE VBELN =  L_vbelv_temp and  PARVW in  ( 'RG' , 'WE' ).
+**SELECT SINGLE STCD1 FROM VBPA3 INTO WA_DOC-RECEIVER-ID WHERE VBELN =  L_vbelv_temp and  PARVW = 'WE' .
+*SELECT SINGLE STCD1 FROM VBPA3 INTO WA_DOC-RECEIVER-ID WHERE VBELN =  wa-VBELV and  PARVW = 'WE' .
+*
+*"""""""""""""9-12-2022""""""""
+*
+**SELECT SINGLE ADRNR FROM VBPA INTO L_ADRNR_temp WHERE VBELN = L_vbelv_temp and PARVW = 'RG'.
+**SELECT SINGLE ADRNR FROM VBPA INTO L_ADRNR_temp WHERE VBELN = L_vbelv_temp and PARVW = 'WE'.
+*SELECT SINGLE ADRNR FROM VBPA INTO L_ADRNR_temp WHERE VBELN = wa-VBELV and PARVW = 'WE'.
+*
+*SELECT SINGLE  COUNTRY , CITY1 , REGION , STREET , POST_CODE1 , BUILDING , FLOOR , ROOMNUMBER , NAME1
+*  FROM adrc into ( @WA_DOC-RECEIVER-ADDRESS-COUNTRY , @WA_DOC-RECEIVER-ADDRESS-GOVERNATE ,
+*    @WA_DOC-RECEIVER-ADDRESS-REGION_CITY , @WA_DOC-RECEIVER-ADDRESS-STREET ,
+*    @WA_DOC-RECEIVER-ADDRESS-POSTAL_CODE , @WA_DOC-RECEIVER-ADDRESS-BUILDING_NUMBER ,
+*    @WA_DOC-RECEIVER-ADDRESS-FLOOR , @WA_DOC-RECEIVER-ADDRESS-ROOM  , @WA_DOC-RECEIVER-NAME ) WHERE ADDRNUMBER = @L_ADRNR_temp.
+*
+*"""""""""""""9-12-2022""""""""
+*
+*
+*  REPLACE ALL OCCURRENCES OF '-' IN WA_DOC-RECEIVER-ID WITH ''.
+*  REPLACE ALL OCCURRENCES OF '/' IN WA_DOC-RECEIVER-ID WITH ''.
+*  REPLACE ALL OCCURRENCES OF '\' IN WA_DOC-RECEIVER-ID WITH ''.
+*  REPLACE ALL OCCURRENCES OF '.' IN WA_DOC-RECEIVER-ID WITH ''.
+*  REPLACE ALL OCCURRENCES OF ',' IN WA_DOC-RECEIVER-ID WITH ''.
+*  REPLACE ALL OCCURRENCES OF '_' IN WA_DOC-RECEIVER-ID WITH ''.
+*
+*
+*
+*
+*
+*  ENDIF.
+  """""""""""""""""" " end 7-12-2022 """""""""""""""
+
+  if wa-vtweg = '10' or wa-vtweg = '35'.
+    wa_doc-receiver-type = 'F'.
+  else.
+*********     get receiver validations ON RECEIVER ID
+*    IF WA_DOC-RECEIVER-ID  IS INITIAL AND NET > 50000.
+    if wa_doc-receiver-id  is initial and net > 150000.
+      message 'Registration number for customer is Empty' type 'I'.
+*    ELSEIF WA_DOC-RECEIVER-ID  IS INITIAL AND NET < 50000.
+*    ELSEIF WA_DOC-RECEIVER-ID  IS INITIAL AND NET < 150000. " " commented 30-12-2022 by mosbah (Review)
+*      WA_DOC-RECEIVER-TYPE = 'P'.
+    endif.
+    if wa_doc-receiver-address-country is initial .
+      wa_doc-receiver-address-country = 'EG'.
+    endif.
+  endif.
+**********     get receiver EMPTY FIELDS .
+  if wa_doc-receiver-address-country is initial .
+    wa_doc-receiver-address-country = null.
+  endif.
+  if wa_doc-receiver-address-governate is initial .
+    wa_doc-receiver-address-governate = null.
+  endif.
+  if wa_doc-receiver-address-region_city is initial .
+    wa_doc-receiver-address-region_city = null.
+  endif.
+  if wa_doc-receiver-address-street is initial .
+    wa_doc-receiver-address-street = null.
+  endif.
+  if wa_doc-receiver-address-building_number is initial .
+    wa_doc-receiver-address-building_number = null.
+  endif.
+  if wa_doc-receiver-address-floor is initial .
+    wa_doc-receiver-address-floor = null.
+  endif.
+
+endform.
+
+form get_docdata.
+
+  wa_doc-document_type_version = '1.0'.
+
+  select single doc_type
+    into wa_doc-document_type
+    from zsd_einv_doccat
+    where vbtyp = wa-vbtyp.
+  if wa-fkart = 'ZFOC'.
+    wa_doc-document_type = 'D'.
+  endif.
+  if wa_doc-document_type is initial.
+    message 'Please maintain assign document category for document number: ' && wa-vbeln  type 'I'.
+  endif.
+
+
+  "WA-FKDAT = sy-datum . """" MUST BE REMOVED BEFORE  GO LIVE
+  "FORMAT : YEAR - MONTH - DAY - TIME
+*  CONCATENATE WA-FKDAT(4) '-' WA-FKDAT+4(2) '-' WA-FKDAT+6(2) 'T10:00:00Z' INTO WA_DOC-DATE_TIME_ISSUED.
+
+*  CONCATENATE WA-FKDAT(4) '-' WA-FKDAT+4(2) '-' WA-FKDAT+6(2) 'T' wa-ERZET(2) ':' wa-ERZET+2(2) ':' wa-ERZET+4(2) 'Z'
+*  INTO WA_DOC-DATE_TIME_ISSUED. "edited 10-03-2023
+
+*    CONCATENATE WA-FKDAT(4) '-' WA-FKDAT+4(2) '-' WA-FKDAT+6(2) 'T00:01:00Z' INTO WA_DOC-DATE_TIME_ISSUED.
+  concatenate wa-erdat(4) '-' wa-erdat+4(2) '-' wa-erdat+6(2) 'T00:01:00Z' into wa_doc-date_time_issued.
+
+  select single value
+    into wa_doc-taxpayer_activity_code
+    from zsd_einv_setting
+    where bukrs = wa-bukrs and key_code = '04'.
+
+  wa_doc-internal_i_d = wa-vbeln.
+
+  """"""""" 23.12.2023 """""""""
+
+  select aubel from vbrp  into table @data(it_aubel) where vbeln = @wa-vbeln  .
+*
+*   SELECT SINGLE BSTKD FROM VBKD
+*     into WA_DOC-PURCHASE_ORDER_REFERENCE
+*     WHERE VBELN = aubel.
+*
+
+  select bstkd from vbkd
+    for all entries in @it_aubel
+    where vbeln = @it_aubel-aubel and bstkd is not null
+    into table @data(it_bstkd).
+  read table it_bstkd into data(wa_bstkd) index 1.
+  wa_doc-purchase_order_reference = wa_bstkd-bstkd.
+
+  clear : wa_bstkd .
+  refresh : it_aubel,it_bstkd.
+
+  """"""""" 23.12.2023 """""""""
+
+endform.
+
+"OPTIONAL
+form get_delivery.
+
+  select single likp~expkz likp~inco1
+    from vbrp
+    inner join likp
+    on ( vbrp~vgbel eq likp~vbeln )
+    into ( wa_doc-delivery-export_port , wa_doc-delivery-terms )
+    where vbrp~vbeln eq wa-vbeln .
+
+  select sum( brgew ) sum( ntgew )
+    from vbrp
+    into ( wa_doc-delivery-gross_weight , wa_doc-delivery-net_weight )
+    where vbrp~vbeln eq wa-vbeln.
+
+  select single tvsbt~vtext
+    from vbrk
+    inner join tvsbt
+    on ( vbrk~vsbed eq tvsbt~vsbed )
+    into wa_doc-delivery-approach
+    where vbrk~vbeln eq wa-vbeln and tvsbt~spras eq 'E' .
+
+endform.
+
+form get_iline.
+  clear : total_items_discount_amount , iline , taxtot , iline_e.
+
+  select single knumv kurrf
+    from vbrk
+    into ( knumv , kurrf )
+    where vbeln eq wa-vbeln .
+
+
+*  """"""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // Start
+*IF WA_DOC-RECEIVER-TYPE = 'F' .
+*  CONCATENATE 'E' WA_DOC-DOCUMENT_TYPE INTO WA_DOC-DOCUMENT_TYPE.
+*  CONDENSE WA_DOC-DOCUMENT_TYPE.
+**  MOVE-CORRESPONDING WA_DOC to WA_DOC_Export.
+*
+*
+*
+*
+*
+*
+*ENDIF.
+*""""""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // end
+
+
+  "SPECIAL GS CODES FOR ARMY
+*  IF WA-VTWEG = '30'.
+*    SELECT VBRP~ARKTX AS DESCRIPTION UNIT_TYPE VBRP~MATNR AS INTERNAL_CODE VBRP~FKLMG AS QUANTITY MARA~FERTH AS ITEM_CODE POSNR NUMTP
+*      " CHNGE QTY FKIMG
+*      FROM VBRP
+*      INNER JOIN MARA
+*      ON ( VBRP~MATNR EQ MARA~MATNR )
+*      INNER JOIN ZSD_EINV_UNIT
+*      ON VBRP~MEINS = ZSD_EINV_UNIT~VRKME " CHANGE UNIT VRKME
+*      INTO CORRESPONDING FIELDS OF TABLE ITEMS
+*      WHERE VBRP~VBELN EQ WA-VBELN .
+*  ELSE.
+
+**   normt => EAN11
+**    SELECT VBRP~ARKTX AS DESCRIPTION UNIT_TYPE VBRP~MATNR AS INTERNAL_CODE VBRP~FKLMG AS QUANTITY MARA~NORMT AS ITEM_CODE POSNR NUMTP
+*  SELECT VBRP~ARKTX AS DESCRIPTION UNIT_TYPE VBRP~MATNR AS INTERNAL_CODE VBRP~FKLMG AS QUANTITY MARA~EAN11 AS ITEM_CODE POSNR NUMTP
+*    " CHNGE QTY FKIMG
+*    FROM VBRP
+*    INNER JOIN MARA
+*    ON ( VBRP~MATNR EQ MARA~MATNR )
+*    INNER JOIN ZSD_EINV_UNIT
+*    ON VBRP~MEINS = ZSD_EINV_UNIT~VRKME  " CHANGE UNIT VRKME
+*    INTO CORRESPONDING FIELDS OF TABLE ITEMS
+*    WHERE VBRP~VBELN EQ WA-VBELN .
+**  ENDIF.
+*
+*  LOOP AT ITEMS INTO ITEM WHERE QUANTITY <> 0.
+*    " CLEAR : EXTRA_DISCOUNT_AMOUNT , TOTAL_DISCOUNT_AMOUNT.
+*
+*    MOVE-CORRESPONDING ITEM TO ILINE.
+*    IF WA-VTWEG = '30'.
+*      ILINE-DESCRIPTION = 'DESCRIPTION'.
+*    ENDIF.
+*    ILINE-ITEM_TYPE = 'GS1'.
+*    IF ILINE-ITEM_CODE IS INITIAL.
+*      MESSAGE 'Please maintain GS1 Code for document: ' && WA-VBELN && ' for material: ' && ILINE-INTERNAL_CODE && ' ' TYPE 'I'.
+*    ENDIF.
+*    " use kstat for sorting
+**    SELECT WAERS KBETR KWERT KKURS ZSD_EINV_KSCHL~category as KSCHL KPEIN KSTAT KRECH KINAK KRECH MWSK1 " ESRAA ADDED MWSK1
+**      FROM PRCD_ELEMENTS
+***      FROM KONV
+**      inner JOIN ZSD_EINV_KSCHL
+**      on ZSD_EINV_KSCHL~KSCHL = PRCD_ELEMENTS~KSCHL
+***      on ZSD_EINV_KSCHL~KSCHL = KONV~KSCHL
+**      INTO CORRESPONDING FIELDS of IT_PRICING
+**      WHERE KNUMV EQ KNUMV AND KPOSN EQ ITEM-POSNR AND KINAK = ''.
+*
+*    "KRECH
+*    SELECT WAERS KBETR KWERT KKURS KPEIN KSTAT  KINAK KRECH MWSK1 KSCHL FROM KONV INTO CORRESPONDING FIELDS OF IT_PRICING " " addint table for corresponding by mosbah
+*       WHERE KNUMV EQ KNUMV AND KPOSN EQ ITEM-POSNR AND KINAK = ''.
+*      SELECT SINGLE CATEGORY AS KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF IT_PRICING
+*               WHERE KSCHL = IT_PRICING-KSCHL  .
+*      IF IT_PRICING-KSCHL = 'P'.
+*        IT_PRICING-KSTAT = 'A'.
+*      ELSEIF IT_PRICING-KSCHL = 'T'.
+*        IT_PRICING-KSTAT = 'C'.
+*      ELSEIF IT_PRICING-KSCHL = 'D'.
+*        IT_PRICING-KSTAT = 'B'.
+*      ENDIF.
+*      APPEND VALUE #( SIGN = 'I' OPTION = 'EQ' LOW = IT_PRICING-KSCHL ) TO TYPES.
+*      APPEND IT_PRICING.
+*
+*    ENDSELECT.
+**LOOP AT IT_PRICING INTO WA_PRICING.
+** SELECT SINGLE category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF WA_PRICING
+**         WHERE KSCHL = WA_PRICING-KSCHL  .
+**   modify IT_PRICING FROM WA_PRICING.
+**   CLEAR WA_PRICING.
+**ENDLOOP.
+**      SELECT category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF IT_PRICING
+**        FOR ALL ENTRIES IN IT_PRICING WHERE KSCHL = IT_PRICING-KSCHL  .
+**      endselect.
+*
+***
+***      if it_pricing-kschl = 'P'.
+***      it_pricing-kstat = 'A'.
+***      ELSEIF it_pricing-kschl = 'T'.
+***       it_pricing-kstat = 'C'.
+***      ELSEIF it_pricing-kschl = 'D'.
+***        it_pricing-kstat = 'B'.
+***        ENDIF.
+***        APPEND VALUE #( SIGN = 'I' OPTION = 'EQ' LOW = it_pricing-kschl ) TO types.
+***        append it_pricing.
+**      ENDSELECT. " comment by mosbah
+*    SORT IT_PRICING BY KSTAT.
+*    LOOP AT IT_PRICING INTO WA_PRICING ."WHERE kschl <> 'VPRS'.
+**      CLEAR CATEGORY.
+**      SELECT SINGLE CATEGORY
+**        INTO CATEGORY
+**        FROM ZSD_EINV_KSCHL
+**        WHERE KSCHL = WA_PRICING-KSCHL.
+*      CASE  WA_PRICING-KSCHL."CATEGORY.
+*
+*        WHEN 'P'."PRICE CONDITION
+*          ILINE-UNIT_VALUE-CURRENCY_SOLD = WA_PRICING-WAERS.
+*          ILINE-UNIT_VALUE-AMOUNT_E_G_P = ILINE-UNIT_VALUE-AMOUNT_E_G_P + WA_PRICING-KBETR . " unit price
+*
+*          IF ILINE-UNIT_VALUE-CURRENCY_SOLD <> 'EGP'.
+**            ILINE-UNIT_VALUE-AMOUNT_SOLD = ILINE-UNIT_VALUE-AMOUNT_SOLD +  WA_PRICING-KBETR ."WA_PRICING-KWERT .
+*            ILINE-UNIT_VALUE-AMOUNT_SOLD =   WA_PRICING-KBETR ."WA_PRICING-KWERT .
+*            ILINE-UNIT_VALUE-CURRENCY_EXCHANGE_RATE = ROUND( VAL = KURRF DEC = 2 ).
+**            ILINE-UNIT_VALUE-AMOUNT_E_G_P =  ILINE-UNIT_VALUE-AMOUNT_E_G_P + ( WA_PRICING-KBETR *  ILINE-UNIT_VALUE-CURRENCY_EXCHANGE_RATE ).
+*            ILINE-UNIT_VALUE-AMOUNT_E_G_P = WA_PRICING-KBETR *  ILINE-UNIT_VALUE-CURRENCY_EXCHANGE_RATE .
+*          ENDIF.
+*
+*          ILINE-SALES_TOTAL = ILINE-SALES_TOTAL + (  ILINE-UNIT_VALUE-AMOUNT_E_G_P * ITEM-QUANTITY ).
+*          WA_DOC-TOTAL_SALES_AMOUNT = WA_DOC-TOTAL_SALES_AMOUNT + ILINE-SALES_TOTAL.
+*        WHEN 'T'."TAX AMOUNT
+*          CLEAR ETAX.
+*          IF ( WA_PRICING-MWSK1 = 'A1' OR WA_PRICING-MWSK1 = 'A2' OR WA_PRICING-MWSK1 = 'V1' ).
+*            ETAX-TAX_TYPE = 'T2'.
+*            TAXTOT-TAX_TYPE = 'T2'.
+*            ETAX-SUB_TYPE = 'Tbl01'.
+*          ELSE.
+*            ETAX-TAX_TYPE = 'T1'.
+*            TAXTOT-TAX_TYPE = 'T1'.
+*            ETAX-SUB_TYPE = 'V009'.
+*          ENDIF.
+**          ETAX-RATE     = WA_PRICING-kbetr .
+*          ETAX-RATE     = WA_PRICING-KBETR / 10 . "by mosbah
+*          ETAX-AMOUNT   = ( ETAX-RATE / 100 ) * ( ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-QUANTITY ) - ILINE-DISCOUNT-AMOUNT )."ILINE-SALES_TOTAL * ( WA_PRICING-KBETR / 100 ) .".
+*          TAXTOT-AMOUNT = ETAX-AMOUNT + TAXTOT-AMOUNT."WA_PRICING-KWERT
+*          IF ETAX-AMOUNT IS NOT INITIAL.
+*            APPEND ETAX TO ILINE-TAXABLE_ITEMS.
+*          ENDIF.
+*
+*        WHEN 'D'."DISCOUNTS -- handel rates or not
+*          ILINE-DISCOUNT-RATE   = 0."ABS( WA_PRICING-KBETR ) .
+*          ILINE-DISCOUNT-AMOUNT = ILINE-DISCOUNT-AMOUNT + ABS( WA_PRICING-KWERT )."( ILINE-DISCOUNT-RATE / 100 ) * ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-quantity ).
+*          TOTAL_DISCOUNT_AMOUNT = TOTAL_DISCOUNT_AMOUNT +  ABS( WA_PRICING-KWERT ).
+*          WA_DOC-TOTAL_DISCOUNT_AMOUNT = TOTAL_DISCOUNT_AMOUNT ."+ ILINE-DISCOUNT-AMOUNT.
+*        WHEN 'E'."EXTRA DISCOUNTS
+*          WA_DOC-EXTRA_DISCOUNT_AMOUNT = EXTRA_DISCOUNT_AMOUNT + WA_PRICING-KWERT.
+*
+*      ENDCASE.
+*      AT LAST.
+*        IF 'T' NOT IN TYPES.
+*          ETAX-TAX_TYPE = 'T1'.
+*          TAXTOT-TAX_TYPE = 'T1'.
+*          ETAX-SUB_TYPE = 'V009'.
+*          ETAX-RATE     = 0 .
+*          ETAX-AMOUNT   = 0 .
+*          APPEND ETAX TO ILINE-TAXABLE_ITEMS.
+*        ENDIF.
+*      ENDAT.
+*
+*    ENDLOOP.
+*    ILINE-NET_TOTAL = ILINE-SALES_TOTAL - ILINE-DISCOUNT-AMOUNT.
+*    ILINE-TOTAL = ILINE-SALES_TOTAL + ETAX-AMOUNT - ILINE-DISCOUNT-AMOUNT.
+**    WA_DOC-TOTAL_ITEMS_DISCOUNT_AMOUNT = TOTAL_ITEMS_DISCOUNT_AMOUNT + TOTAL_DISCOUNT_AMOUNT.
+*    WA_DOC-NET_AMOUNT = WA_DOC-NET_AMOUNT + ILINE-NET_TOTAL.
+*    "WA_DOC-TOTAL_AMOUNT = WA_DOC-TOTAL_AMOUNT + ILINE-TOTAL.
+*    WA_DOC-TOTAL_AMOUNT = WA_DOC-TOTAL_SALES_AMOUNT - TOTAL_DISCOUNT_AMOUNT + TAXTOT-AMOUNT.
+*    APPEND ILINE TO WA_DOC-INVOICE_LINES.
+*    CLEAR ILINE.
+*    CLEAR: IT_PRICING , IT_PRICING[],TYPES,TYPES[].
+*
+*  ENDLOOP.
+*  IF TAXTOT IS NOT INITIAL.
+*    APPEND TAXTOT TO WA_DOC-TAX_TOTALS.
+*  ENDIF.
+*
+
+
+*  IF WA_DOC-RECEIVER-TYPE = 'F'. " export
+  if wa_doc-document_type = 'EI' or wa_doc-document_type = 'EC' or wa_doc-document_type = 'ED' . " export
+
+*   normt => EAN11
+*    SELECT VBRP~ARKTX AS DESCRIPTION UNIT_TYPE VBRP~MATNR AS INTERNAL_CODE VBRP~FKLMG AS QUANTITY MARA~NORMT AS ITEM_CODE POSNR NUMTP
+    select vbrp~arktx as description unit_type vbrp~matnr as internal_code vbrp~fklmg as quantity mara~ean11 as item_code posnr numtp
+            vbrp~ntgew as weight_quantity
+            vbrp~gewei as weight_unit_type
+      " CHNGE QTY FKIMG
+      from vbrp
+      inner join mara
+      on ( vbrp~matnr eq mara~matnr )
+      inner join zsd_einv_unit
+      on vbrp~meins = zsd_einv_unit~vrkme  " CHANGE UNIT VRKME
+      into corresponding fields of table items_e
+      where vbrp~vbeln eq wa-vbeln .
+*  ENDIF.
+
+    refresh :wa_doc_export-invoice_lines  . " 16.8.2023
+    loop at items_e into item_e where quantity <> 0.
+      " CLEAR : EXTRA_DISCOUNT_AMOUNT , TOTAL_DISCOUNT_AMOUNT.
+
+      move-corresponding item_e to iline_e.
+      select single unit_type from zsd_einv_unit where  vrkme = @item_e-weight_unit_type into @iline_e-weight_unit_type.
+      if wa-vtweg = '30'.
+        iline_e-description = 'DESCRIPTION'.
+      endif.
+      iline_e-item_type = 'GS1'.
+      if iline_e-item_code is initial.
+        message 'Please maintain GS1 Code for document: ' && wa-vbeln && ' for material: ' && iline_e-internal_code && ' ' type 'I'.
+      endif.
+      " use kstat for sorting
+*    SELECT WAERS KBETR KWERT KKURS ZSD_EINV_KSCHL~category as KSCHL KPEIN KSTAT KRECH KINAK KRECH MWSK1 " ESRAA ADDED MWSK1
+*      FROM PRCD_ELEMENTS
+**      FROM KONV
+*      inner JOIN ZSD_EINV_KSCHL
+*      on ZSD_EINV_KSCHL~KSCHL = PRCD_ELEMENTS~KSCHL
+**      on ZSD_EINV_KSCHL~KSCHL = KONV~KSCHL
+*      INTO CORRESPONDING FIELDS of IT_PRICING
+*      WHERE KNUMV EQ KNUMV AND KPOSN EQ ITEM-POSNR AND KINAK = ''.
+
+      "KRECH
+      select waers kbetr kwert kkurs kpein kstat  kinak krech mwsk1 kschl from konv into corresponding fields of it_pricing " " addint table for corresponding by mosbah
+         where knumv eq knumv and kposn eq item_e-posnr and kinak = ''.
+        select single category as kschl from zsd_einv_kschl into corresponding fields of it_pricing
+                 where kschl = it_pricing-kschl  .
+        if it_pricing-kschl = 'P'.
+          it_pricing-kstat = 'A'.
+        elseif it_pricing-kschl = 'T'.
+          it_pricing-kstat = 'C'.
+        elseif it_pricing-kschl = 'D'.
+          it_pricing-kstat = 'B'.
+        endif.
+        append value #( sign = 'I' option = 'EQ' low = it_pricing-kschl ) to types.
+        append it_pricing.
+
+      endselect.
+*LOOP AT IT_PRICING INTO WA_PRICING.
+* SELECT SINGLE category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF WA_PRICING
+*         WHERE KSCHL = WA_PRICING-KSCHL  .
+*   modify IT_PRICING FROM WA_PRICING.
+*   CLEAR WA_PRICING.
+*ENDLOOP.
+*      SELECT category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF IT_PRICING
+*        FOR ALL ENTRIES IN IT_PRICING WHERE KSCHL = IT_PRICING-KSCHL  .
+*      endselect.
+
+**
+**      if it_pricing-kschl = 'P'.
+**      it_pricing-kstat = 'A'.
+**      ELSEIF it_pricing-kschl = 'T'.
+**       it_pricing-kstat = 'C'.
+**      ELSEIF it_pricing-kschl = 'D'.
+**        it_pricing-kstat = 'B'.
+**        ENDIF.
+**        APPEND VALUE #( SIGN = 'I' OPTION = 'EQ' LOW = it_pricing-kschl ) TO types.
+**        append it_pricing.
+*      ENDSELECT. " comment by mosbah
+      sort it_pricing by kstat.
+      loop at it_pricing into wa_pricing ."WHERE kschl <> 'VPRS'.
+*      CLEAR CATEGORY.
+*      SELECT SINGLE CATEGORY
+*        INTO CATEGORY
+*        FROM ZSD_EINV_KSCHL
+*        WHERE KSCHL = WA_PRICING-KSCHL.
+        case  wa_pricing-kschl."CATEGORY.
+
+          when 'P'."PRICE CONDITION
+            iline_e-unit_value-currency_sold = wa_pricing-waers.
+            iline_e-unit_value-amount_e_g_p = iline_e-unit_value-amount_e_g_p + wa_pricing-kbetr . " unit price
+
+            if iline_e-unit_value-currency_sold <> 'EGP'.
+*            ILINE-UNIT_VALUE-AMOUNT_SOLD = ILINE-UNIT_VALUE-AMOUNT_SOLD +  WA_PRICING-KBETR ."WA_PRICING-KWERT .
+              iline_e-unit_value-amount_sold =   wa_pricing-kbetr ."WA_PRICING-KWERT .
+              iline_e-unit_value-currency_exchange_rate = round( val = kurrf dec = 2 ).
+*            ILINE-UNIT_VALUE-AMOUNT_E_G_P =  ILINE-UNIT_VALUE-AMOUNT_E_G_P + ( WA_PRICING-KBETR *  ILINE-UNIT_VALUE-CURRENCY_EXCHANGE_RATE ).
+              iline_e-unit_value-amount_e_g_p = wa_pricing-kbetr *  iline_e-unit_value-currency_exchange_rate .
+            endif.
+
+            iline_e-sales_total = iline_e-sales_total + (  iline_e-unit_value-amount_e_g_p * item_e-quantity ).
+            wa_doc_export-total_sales_amount = wa_doc_export-total_sales_amount + iline_e-sales_total.
+          when 'T'."TAX AMOUNT
+            clear etax.
+            if ( wa_pricing-mwsk1 = 'A1' or wa_pricing-mwsk1 = 'A2' or wa_pricing-mwsk1 = 'V1' ).
+              etax-tax_type = 'T2'.
+              taxtot-tax_type = 'T2'.
+              etax-sub_type = 'Tbl01'.
+            else.
+              etax-tax_type = 'T1'.
+              taxtot-tax_type = 'T1'.
+              etax-sub_type = 'V009'.
+            endif.
+*          ETAX-RATE     = WA_PRICING-kbetr .
+            etax-rate     = wa_pricing-kbetr / 10 . "by mosbah
+            etax-amount   = ( etax-rate / 100 ) * ( ( iline_e-unit_value-amount_e_g_p * iline_e-quantity ) - iline_e-discount-amount )."ILINE-SALES_TOTAL * ( WA_PRICING-KBETR / 100 ) .".
+            taxtot-amount = etax-amount + taxtot-amount."WA_PRICING-KWERT
+            if etax-amount is not initial.
+              append etax to iline_e-taxable_items.
+            endif.
+
+          when 'D'."DISCOUNTS -- handel rates or not
+            iline_e-discount-rate   = 0."ABS( WA_PRICING-KBETR ) .
+            iline_e-discount-amount = iline_e-discount-amount + abs( wa_pricing-kwert )."( ILINE-DISCOUNT-RATE / 100 ) * ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-quantity ).
+            total_discount_amount = total_discount_amount +  abs( wa_pricing-kwert ).
+            wa_doc_export-total_discount_amount = total_discount_amount ."+ ILINE-DISCOUNT-AMOUNT.
+          when 'E'."EXTRA DISCOUNTS
+            wa_doc_export-extra_discount_amount = extra_discount_amount + wa_pricing-kwert.
+
+        endcase.
+        at last.
+          if 'T' not in types.
+            etax-tax_type = 'T1'.
+            taxtot-tax_type = 'T1'.
+            etax-sub_type = 'V009'.
+            etax-rate     = 0 .
+            etax-amount   = 0 .
+            append etax to iline_e-taxable_items.
+          endif.
+        endat.
+
+      endloop.
+      iline_e-net_total = iline_e-sales_total - iline_e-discount-amount.
+      iline_e-total = iline_e-sales_total + etax-amount - iline_e-discount-amount.
+*    WA_DOC-TOTAL_ITEMS_DISCOUNT_AMOUNT = TOTAL_ITEMS_DISCOUNT_AMOUNT + TOTAL_DISCOUNT_AMOUNT.
+      wa_doc_export-net_amount = wa_doc_export-net_amount + iline_e-net_total.
+      "WA_DOC-TOTAL_AMOUNT = WA_DOC-TOTAL_AMOUNT + ILINE-TOTAL.
+      wa_doc_export-total_amount = wa_doc_export-total_sales_amount - total_discount_amount + taxtot-amount.
+      append iline_e to wa_doc_export-invoice_lines.
+      clear iline_e.
+      clear: it_pricing , it_pricing[],types,types[].
+
+    endloop.
+    if taxtot is not initial.
+      append taxtot to wa_doc_export-tax_totals.
+    endif.
+
+    """"""""""""" 19.12.2023 """""""" " start
+
+    data:  r_internal_code type range of string.
+    r_internal_code = value #(
+      for <line1> in wa_doc_export-invoice_lines
+      ( sign = 'I'
+        option = 'EQ'
+        low = <line1>-internal_code )
+    ).
+    delete adjacent duplicates from r_internal_code comparing low.
+    data : invoice_lines type zsd_abap_tt_ilines_e,
+           invoice_line  like line of invoice_lines.
+    data : lv_weight_quantity type p length 13 decimals 5.
+    data : lv_quantity        type p length 13 decimals 5.
+
+    data : lv_amount_e_g_p type  p length  13  decimals 5,
+           lv_amount_sold  type  p length  13  decimals 5.
+
+    data : lv_rate_discount   type  p length  13  decimals 5,
+           lv_amount_discount type  p length  13  decimals 5.
+
+
+    loop at r_internal_code assigning field-symbol(<fs>).
+      invoice_line-internal_code = <fs>-low.
+      read table wa_doc_export-invoice_lines into data(iv_line) with key internal_code = <fs>-low.
+      invoice_line-description = iv_line-description.
+      invoice_line-item_type = iv_line-item_type.
+      invoice_line-item_code = iv_line-item_code.
+      invoice_line-unit_type = iv_line-unit_type.
+      invoice_line-weight_unit_type = iv_line-weight_unit_type.
+      invoice_line-unit_value-currency_exchange_rate = iv_line-unit_value-currency_exchange_rate.
+      invoice_line-unit_value-currency_sold = iv_line-unit_value-currency_sold.
+      move-corresponding iv_line-taxable_items to invoice_line-taxable_items.
+      loop at wa_doc_export-invoice_lines assigning field-symbol(<line>) where internal_code = <fs>-low.
+        lv_weight_quantity                  =  lv_weight_quantity                + ( <line>-weight_quantity         * <line>-quantity ).
+        lv_quantity                         =  lv_quantity                       +   <line>-quantity                                   .
+        lv_amount_e_g_p                     =  lv_amount_e_g_p                   + ( <line>-unit_value-amount_e_g_p * <line>-quantity ).
+        lv_amount_sold                     =  lv_amount_sold                     + ( <line>-unit_value-amount_sold  * <line>-quantity ).
+        invoice_line-sales_total            =  invoice_line-sales_total          +   <line>-sales_total .
+        invoice_line-total                  =  invoice_line-total                +   <line>-total .
+        invoice_line-value_difference       =  invoice_line-value_difference     +   <line>-value_difference .
+        invoice_line-total_taxable_fees     =  invoice_line-total_taxable_fees   +   <line>-total_taxable_fees .
+        invoice_line-net_total              =  invoice_line-net_total            +   <line>-net_total .
+        invoice_line-items_discount         =  invoice_line-items_discount       +   <line>-items_discount .
+        lv_rate_discount                    =  lv_rate_discount                  + ( <line>-discount-rate         * <line>-quantity ).
+        lv_amount_discount                  =  lv_amount_discount                + ( <line>-discount-amount       * <line>-quantity ).
+      endloop.
+      invoice_line-weight_quantity          =  lv_weight_quantity / lv_quantity.
+      invoice_line-unit_value-amount_e_g_p  =  lv_amount_e_g_p    / lv_quantity.
+      invoice_line-unit_value-amount_sold   =  lv_amount_sold     / lv_quantity.
+      invoice_line-discount-rate            =  lv_rate_discount   / lv_quantity.
+      invoice_line-discount-amount          =  lv_amount_discount / lv_quantity.
+      invoice_line-quantity                 =  lv_quantity.
+
+      append invoice_line to invoice_lines.
+      clear : invoice_line,iv_line,lv_weight_quantity,lv_quantity,lv_amount_e_g_p,lv_amount_sold,lv_rate_discount,lv_amount_discount.
+    endloop.
+*
+    refresh : wa_doc_export-invoice_lines,r_internal_code.
+    clear : r_internal_code.
+    move-corresponding invoice_lines to wa_doc_export-invoice_lines.
+
+
+
+
+    """"""""""""" 19.12.2023 """""""" " end
+
+
+
+  else.
+
+*   normt => EAN11
+*    SELECT VBRP~ARKTX AS DESCRIPTION UNIT_TYPE VBRP~MATNR AS INTERNAL_CODE VBRP~FKLMG AS QUANTITY MARA~NORMT AS ITEM_CODE POSNR NUMTP
+    select vbrp~arktx as description unit_type vbrp~matnr as internal_code vbrp~fklmg as quantity mara~ean11 as item_code posnr numtp
+      " CHNGE QTY FKIMG
+      from vbrp
+      inner join mara
+      on ( vbrp~matnr eq mara~matnr )
+      inner join zsd_einv_unit
+      on vbrp~meins = zsd_einv_unit~vrkme  " CHANGE UNIT VRKME
+      into corresponding fields of table items
+      where vbrp~vbeln eq wa-vbeln .
+*  ENDIF.
+
+    loop at items into item where quantity <> 0.
+      " CLEAR : EXTRA_DISCOUNT_AMOUNT , TOTAL_DISCOUNT_AMOUNT.
+
+      move-corresponding item to iline.
+      if wa-vtweg = '30'.
+        iline-description = 'DESCRIPTION'.
+      endif.
+      iline-item_type = 'GS1'.
+      if iline-item_code is initial.
+        message 'Please maintain GS1 Code for document: ' && wa-vbeln && ' for material: ' && iline-internal_code && ' ' type 'I'.
+      endif.
+      " use kstat for sorting
+*    SELECT WAERS KBETR KWERT KKURS ZSD_EINV_KSCHL~category as KSCHL KPEIN KSTAT KRECH KINAK KRECH MWSK1 " ESRAA ADDED MWSK1
+*      FROM PRCD_ELEMENTS
+**      FROM KONV
+*      inner JOIN ZSD_EINV_KSCHL
+*      on ZSD_EINV_KSCHL~KSCHL = PRCD_ELEMENTS~KSCHL
+**      on ZSD_EINV_KSCHL~KSCHL = KONV~KSCHL
+*      INTO CORRESPONDING FIELDS of IT_PRICING
+*      WHERE KNUMV EQ KNUMV AND KPOSN EQ ITEM-POSNR AND KINAK = ''.
+
+      "KRECH
+      select waers kbetr kwert kkurs kpein kstat  kinak krech mwsk1 kschl from konv into corresponding fields of it_pricing " " addint table for corresponding by mosbah
+         where knumv eq knumv and kposn eq item-posnr and kinak = ''.
+        select single category as kschl from zsd_einv_kschl into corresponding fields of it_pricing
+                 where kschl = it_pricing-kschl  .
+        if it_pricing-kschl = 'P'.
+          it_pricing-kstat = 'A'.
+        elseif it_pricing-kschl = 'T'.
+          it_pricing-kstat = 'C'.
+        elseif it_pricing-kschl = 'D'.
+          it_pricing-kstat = 'B'.
+        endif.
+        append value #( sign = 'I' option = 'EQ' low = it_pricing-kschl ) to types.
+        append it_pricing.
+
+      endselect.
+*LOOP AT IT_PRICING INTO WA_PRICING.
+* SELECT SINGLE category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF WA_PRICING
+*         WHERE KSCHL = WA_PRICING-KSCHL  .
+*   modify IT_PRICING FROM WA_PRICING.
+*   CLEAR WA_PRICING.
+*ENDLOOP.
+*      SELECT category as KSCHL FROM ZSD_EINV_KSCHL INTO CORRESPONDING FIELDS OF IT_PRICING
+*        FOR ALL ENTRIES IN IT_PRICING WHERE KSCHL = IT_PRICING-KSCHL  .
+*      endselect.
+
+**
+**      if it_pricing-kschl = 'P'.
+**      it_pricing-kstat = 'A'.
+**      ELSEIF it_pricing-kschl = 'T'.
+**       it_pricing-kstat = 'C'.
+**      ELSEIF it_pricing-kschl = 'D'.
+**        it_pricing-kstat = 'B'.
+**        ENDIF.
+**        APPEND VALUE #( SIGN = 'I' OPTION = 'EQ' LOW = it_pricing-kschl ) TO types.
+**        append it_pricing.
+*      ENDSELECT. " comment by mosbah
+      sort it_pricing by kstat.
+      loop at it_pricing into wa_pricing ."WHERE kschl <> 'VPRS'.
+*      CLEAR CATEGORY.
+*      SELECT SINGLE CATEGORY
+*        INTO CATEGORY
+*        FROM ZSD_EINV_KSCHL
+*        WHERE KSCHL = WA_PRICING-KSCHL.
+        case  wa_pricing-kschl."CATEGORY.
+
+          when 'P'."PRICE CONDITION
+            iline-unit_value-currency_sold = wa_pricing-waers.
+            iline-unit_value-amount_e_g_p = iline-unit_value-amount_e_g_p + wa_pricing-kbetr . " unit price
+
+            if iline-unit_value-currency_sold <> 'EGP'.
+*            ILINE-UNIT_VALUE-AMOUNT_SOLD = ILINE-UNIT_VALUE-AMOUNT_SOLD +  WA_PRICING-KBETR ."WA_PRICING-KWERT .
+              iline-unit_value-amount_sold =   wa_pricing-kbetr ."WA_PRICING-KWERT .
+              iline-unit_value-currency_exchange_rate = round( val = kurrf dec = 2 ).
+*            ILINE-UNIT_VALUE-AMOUNT_E_G_P =  ILINE-UNIT_VALUE-AMOUNT_E_G_P + ( WA_PRICING-KBETR *  ILINE-UNIT_VALUE-CURRENCY_EXCHANGE_RATE ).
+              iline-unit_value-amount_e_g_p = wa_pricing-kbetr *  iline-unit_value-currency_exchange_rate .
+            endif.
+
+            iline-sales_total = iline-sales_total + (  iline-unit_value-amount_e_g_p * item-quantity ).
+            wa_doc-total_sales_amount = wa_doc-total_sales_amount + iline-sales_total.
+          when 'T'."TAX AMOUNT
+            clear etax.
+            if ( wa_pricing-mwsk1 = 'A1' or wa_pricing-mwsk1 = 'A2' or wa_pricing-mwsk1 = 'V1' ).
+              etax-tax_type = 'T2'.
+              taxtot-tax_type = 'T2'.
+              etax-sub_type = 'Tbl01'.
+            else.
+              etax-tax_type = 'T1'.
+              taxtot-tax_type = 'T1'.
+              etax-sub_type = 'V009'.
+            endif.
+*          ETAX-RATE     = WA_PRICING-kbetr .
+            etax-rate     = wa_pricing-kbetr / 10 . "by mosbah
+            etax-amount   = ( etax-rate / 100 ) * ( ( iline-unit_value-amount_e_g_p * iline-quantity ) - iline-discount-amount )."ILINE-SALES_TOTAL * ( WA_PRICING-KBETR / 100 ) .".
+            taxtot-amount = etax-amount + taxtot-amount."WA_PRICING-KWERT
+            if etax-amount is not initial.
+              append etax to iline-taxable_items.
+            endif.
+
+          when 'D'."DISCOUNTS -- handel rates or not
+            if iline-unit_value-currency_sold = 'EGP'.
+              iline-discount-rate   = 0."ABS( WA_PRICING-KBETR ) .
+              iline-discount-amount = iline-discount-amount + abs( wa_pricing-kwert )."( ILINE-DISCOUNT-RATE / 100 ) * ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-quantity ).
+              total_discount_amount = total_discount_amount +  abs( wa_pricing-kwert ).
+              wa_doc-total_discount_amount = total_discount_amount ."+ ILINE-DISCOUNT-AMOUNT.
+            else.
+             iline-discount-rate   = ABS( WA_PRICING-KBETR / 10 ).
+
+
+            iline-discount-amount = iline-discount-amount + ( abs( wa_pricing-kwert )  * round( val = kurrf dec = 2 )  ) ."( ILINE-DISCOUNT-RATE / 100 ) * ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-quantity ).
+
+*          iline-discount-amount =  ( ILINE-UNIT_VALUE-AMOUNT_E_G_P * ILINE-quantity ).
+              total_discount_amount = total_discount_amount +   ( abs( wa_pricing-kwert )  * round( val = kurrf dec = 2 )  ) .
+*             total_discount_amount = total_discount_amount * round( val = kurrf dec = 2 ).
+           wa_doc-total_discount_amount = total_discount_amount ."+ ILINE-DISCOUNT-AMOUNT.
+*              wa_doc-total_discount_amount = total_discount_amount.
+            endif.
+
+          when 'E'."EXTRA DISCOUNTS
+            if iline-unit_value-currency_sold = 'EGP'.
+              wa_doc-extra_discount_amount = extra_discount_amount + wa_pricing-kwert.
+            else.
+              wa_doc-extra_discount_amount = ( extra_discount_amount + wa_pricing-kwert ) * round( val = kurrf dec = 2 ).
+            endif.
+
+        endcase.
+        at last.
+          if 'T' not in types.
+            etax-tax_type = 'T1'.
+            taxtot-tax_type = 'T1'.
+            etax-sub_type = 'V009'.
+            etax-rate     = 0 .
+            etax-amount   = 0 .
+            append etax to iline-taxable_items.
+          endif.
+        endat.
+
+      endloop.
+      iline-net_total = iline-sales_total - iline-discount-amount.
+      iline-total = iline-sales_total + etax-amount - iline-discount-amount.
+*    WA_DOC-TOTAL_ITEMS_DISCOUNT_AMOUNT = TOTAL_ITEMS_DISCOUNT_AMOUNT + TOTAL_DISCOUNT_AMOUNT.
+      wa_doc-net_amount = wa_doc-net_amount + iline-net_total.
+      "WA_DOC-TOTAL_AMOUNT = WA_DOC-TOTAL_AMOUNT + ILINE-TOTAL.
+      if iline-unit_value-currency_sold = 'EGP'.
+
+      wa_doc-total_amount = wa_doc-total_sales_amount - total_discount_amount + taxtot-amount.
+      else.
+        wa_doc-total_amount = wa_doc-total_sales_amount -  wa_doc-total_discount_amount + taxtot-amount.
+        endif.
+      append iline to wa_doc-invoice_lines.
+      clear iline.
+      clear: it_pricing , it_pricing[],types,types[].
+
+    endloop.
+    if taxtot is not initial.
+      append taxtot to wa_doc-tax_totals.
+    endif.
+
+
+
+
+
+  endif.
+
+
+
+endform.
+
+
+form get_signature using url.
+  clear : head_fields.
+  free http_client.
+  perform call_url using url changing http_client.
+
+  head_field-name = |Content-Type|.
+  head_field-value = |application/json|.
+  append head_field to head_fields.
+  clear head_field.
+
+  perform set_header using http_method head_fields  changing http_client.
+
+  perform set_body using rv_json changing http_client.
+
+  perform send_receive using http_client 'SIGNATURE'.
+
+endform.
+
+form adjust_json.
+  replace 'issuer":{ "type":"b' in rv_json with 'issuer":{ "type":"B'.
+  replace 'receiver":{ "type":"b' in rv_json with 'receiver":{ "type":"B'.
+  replace 'receiver":{ "type":"p' in rv_json with 'receiver":{ "type":"P'.
+  replace 't10:00:00z' in rv_json with 'T10:00:00Z'.
+  replace 'extraDiscountAmount":"' in rv_json with 'extraDiscountAmount":'.
+  replace '", "totalItemsDiscountAmount' in rv_json with ',"totalItemsDiscountAmount'.
+
+  replace 'totalItemsDiscountAmount":"' in rv_json with 'totalItemsDiscountAmount":'.
+  replace '", "totalAmount' in rv_json with ',"totalAmount'.
+
+  replace 'totalDiscountAmount":"' in rv_json with 'totalDiscountAmount":'.
+  replace '", "netAmount' in rv_json with ',"netAmount'.
+
+  replace all occurrences of 'taxType":"t' in rv_json with 'taxType":"T'.
+
+endform.
+
+****  CREATE JSON FILE FROM STRUCTURE .
+form data_to_json ."USING BODY.
+  """"""""""""""""IF NET < 150000. don't send WA_DOC-RECEIVER-ID to ETA """""""""23-12-2022""""""""""""""""""
+*  IF WA_DOC-RECEIVER-ID  IS NOT INITIAL AND L_NETWR_ch < 50000 .
+*  IF WA_DOC-RECEIVER-ID  IS NOT INITIAL AND L_NETWR_ch < 50000  and  WA_DOC-RECEIVER-TYPE = 'P' . "edited 29-12-2022
+*  IF WA_DOC-RECEIVER-ID  IS NOT INITIAL AND L_NETWR_CH < 150000  AND  WA_DOC-RECEIVER-TYPE = 'P' . "edited 29-12-2022
+*  IF WA_DOC-RECEIVER-ID  IS NOT INITIAL AND L_NETWR_CH < 150000  AND  WA_DOC-RECEIVER-TYPE = 'P' AND WA_DOC-RECEIVER-TYPE <> 'F' . "commented 12-10-2023
+*    CLEAR WA_DOC-RECEIVER-ID.
+*  ENDIF.
+  """"""""""""""""IF NET < 150000. don't send WA_DOC-RECEIVER-ID to ETA """""""""23-12-2022""""""""""""""""""
+
+
+*""""""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // Start
+*IF WA_DOC-RECEIVER-TYPE = 'F' .
+*  CONCATENATE 'E' WA_DOC-DOCUMENT_TYPE INTO WA_DOC-DOCUMENT_TYPE.
+*  CONDENSE WA_DOC-DOCUMENT_TYPE.
+*  MOVE-CORRESPONDING WA_DOC to WA_DOC_Export.
+*ENDIF.
+*""""""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // end
+*
+
+*  IF WA_DOC-RECEIVER-TYPE = 'F' . " export
+  if wa_doc-document_type = 'EI' or wa_doc-document_type = 'EC' or wa_doc-document_type = 'ED' . " export
+
+*   ILINE LIKE LINE OF WA_DOC-INVOICE_LINES,
+*  DATA referance_st LIKE LINE OF WA_DOC_Export-REFERENCES. "ZSD_ABAP_ST_REFERENCES.
+*  DATA referance_tab TYPE TABLE OF ZSD_ABAP_ST_REFERENCES.
+
+    if wa_doc_export-receiver-id is initial.
+      wa_doc_export-receiver-id = '999999999'.
+    endif.
+
+
+
+    data : referance_st like line of wa_doc_export-references.
+    clear : referance_st.
+*
+*    APPEND referance_st to WA_DOC_Export-REFERENCES.
+    if wa_doc_export-document_type = 'EC' or wa_doc_export-document_type = 'ED'.
+      """"""""""""""""
+      select single zsd_inv_invoices~vbeln
+      from vbfa
+      join zsd_inv_invoices on zsd_inv_invoices~vbeln = vbfa~vbelv
+      into @data(vbeln_r)
+      where  vbfa~vbeln = @wa_doc_export-internal_i_d and ( vbfa~vbtyp_n = 'O' or vbfa~vbtyp_n = 'P' ) .
+
+
+      select single vbrk~fkdat
+      from vbrk
+      inner join vbrp
+      on vbrp~vbeln = vbrk~vbeln
+      left outer join kna1 on ( vbrk~kunrg eq kna1~kunnr )
+      inner join t001 on ( vbrk~bukrs eq t001~bukrs )
+      left outer join zsd_inv_invoices on ( vbrk~vbeln = zsd_inv_invoices~vbeln )
+      into  @data(fkdat_r)
+      where vbrk~vbeln = @vbeln_r and vbrk~bukrs = @wa-bukrs.
+
+      clear : wa_doc_export-servicedeliverydate.
+      concatenate fkdat_r(4) '-' fkdat_r+4(2) '-' fkdat_r+6(2) into wa_doc_export-servicedeliverydate.
+
+      """"""""""""""""
+      clear : vbeln_r.
+    endif.
+
+
+
+
+
+    clear rv_json.
+    call method /ui2/cl_json=>serialize
+      exporting
+        data        = wa_doc_export
+*       COMPRESS    = C_BOOL-FALSE
+*       NAME        =
+        pretty_name = 'X'
+*       TYPE_DESCR  =
+*       ASSOC_ARRAYS     = C_BOOL-FALSE
+*       TS_AS_ISO8601    = C_BOOL-FALSE
+*       EXPAND_INCLUDES  = C_BOOL-TRUE
+*       ASSOC_ARRAYS_OPT = C_BOOL-FALSE
+*       NUMC_AS_STRING   = C_BOOL-FALSE
+*       NAME_MAPPINGS    =
+*       CONVERSION_EXITS = C_BOOL-FALSE
+      receiving
+        r_json      = rv_json.
+    replace  'branchId' with 'branchID'into rv_json.
+    replace  'servicedeliverydate' with 'serviceDeliveryDate'into rv_json.
+*REPLACE  '"references": "WDVS6QSD18DJP0QYYPEN005H10"' WITH '"references": ["WDVS6QSD18DJP0QYYPEN005H10"]'INTO RV_JSON.
+
+
+    data : ref1 type string.
+    select single uuid
+    from vbfa
+    join zsd_inv_invoices on zsd_inv_invoices~vbeln = vbfa~vbelv
+    into referance_st-str
+    where  vbfa~vbeln = wa_doc_export-internal_i_d and ( vbfa~vbtyp_n = 'O' or vbfa~vbtyp_n = 'P' ) .
+    "references": []
+    concatenate '"references":["'  referance_st-str  '"]' into ref1.
+*  REPLACE '"references": []' WITH ref1 INTO RV_JSON.
+    if wa_doc-document_type <> 'EI'.
+      replace all occurrences of '"references":[]' in rv_json with ref1.
+    endif.
+
+
+
+    clear : ref1.
+*SPLIT RV_JSON AT '"references": []' INTO DATA(SP1) DATA(SP2).
+*CONCATENATE SP1 ref1 sp2 INTO RV_JSON.
+*  CLEAR : sp1,sp2,ref1.
+*REPLACE SUBSTRING `all` IN str WITH `er`.
+  else.
+    if sy-sysid <> 'E11'. " for testing in dev only
+      wa_doc-receiver-address-branch_id = '1'.
+    endif.
+    clear rv_json.
+    call method /ui2/cl_json=>serialize
+      exporting
+        data        = wa_doc
+*       COMPRESS    = C_BOOL-FALSE
+*       NAME        =
+        pretty_name = 'X'
+*       TYPE_DESCR  =
+*       ASSOC_ARRAYS     = C_BOOL-FALSE
+*       TS_AS_ISO8601    = C_BOOL-FALSE
+*       EXPAND_INCLUDES  = C_BOOL-TRUE
+*       ASSOC_ARRAYS_OPT = C_BOOL-FALSE
+*       NUMC_AS_STRING   = C_BOOL-FALSE
+*       NAME_MAPPINGS    =
+*       CONVERSION_EXITS = C_BOOL-FALSE
+      receiving
+        r_json      = rv_json.
+
+
+    if sy-sysid <> 'E11'. " for testing in dev only
+      replace all occurrences of '"branchId"' in rv_json with '"branchID"'.
+      replace all occurrences of '"branchID":"1",' in rv_json with ''.
+      "branchID":"1",
+    endif.
+  endif.
+*  CLEAR RV_JSON.
+*  CALL METHOD /UI2/CL_JSON=>SERIALIZE
+*    EXPORTING
+*      DATA        = WA_DOC
+**     COMPRESS    = C_BOOL-FALSE
+**     NAME        =
+*      PRETTY_NAME = 'X'
+**     TYPE_DESCR  =
+**     ASSOC_ARRAYS     = C_BOOL-FALSE
+**     TS_AS_ISO8601    = C_BOOL-FALSE
+**     EXPAND_INCLUDES  = C_BOOL-TRUE
+**     ASSOC_ARRAYS_OPT = C_BOOL-FALSE
+**     NUMC_AS_STRING   = C_BOOL-FALSE
+**     NAME_MAPPINGS    =
+**     CONVERSION_EXITS = C_BOOL-FALSE
+*    RECEIVING
+*      R_JSON      = RV_JSON.
+endform.
+
+
+
+
+
+
+form move_to_export_doc.
+  """"""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // Start
+  if wa_doc-receiver-type = 'F' .
+
+    concatenate 'E' wa_doc-document_type into wa_doc-document_type.
+    condense wa_doc-document_type.
+
+    select single document_type_t from zsd_inv_flag into @data(doc_target) where document_type_s = @wa_doc-document_type.
+    wa_doc-document_type = doc_target .
+    condense wa_doc-document_type.
+    clear : doc_target.
+*  MOVE-CORRESPONDING WA_DOC to WA_DOC_Export.
+
+    if wa_doc-document_type = 'EI' or wa_doc-document_type = 'EC' or  wa_doc-document_type = 'ED' .
+
+*  MOVE-CORRESPONDING WA_DOC to WA_DOC_Export. " 10.7.2023
+      move wa_doc-issuer to wa_doc_export-issuer.
+      move wa_doc-receiver-type to wa_doc_export-receiver-type.
+      move wa_doc-receiver-id   to wa_doc_export-receiver-id  .
+      move wa_doc-receiver-name to wa_doc_export-receiver-name.
+      move wa_doc-receiver-address-country          to wa_doc_export-receiver-address-country         .
+      move wa_doc-receiver-address-governate        to wa_doc_export-receiver-address-governate       .
+      move wa_doc-receiver-address-region_city      to wa_doc_export-receiver-address-region_city     .
+      move wa_doc-receiver-address-street           to wa_doc_export-receiver-address-street          .
+      move wa_doc-receiver-address-building_number  to wa_doc_export-receiver-address-building_number .
+      move wa_doc-receiver-address-postal_code      to wa_doc_export-receiver-address-postal_code     .
+      move wa_doc-receiver-address-floor            to wa_doc_export-receiver-address-floor           .
+      move wa_doc-receiver-address-room             to wa_doc_export-receiver-address-room            .
+      move wa_doc-receiver-address-landmark         to wa_doc_export-receiver-address-landmark        .
+      move wa_doc-receiver-address-additional_information to wa_doc_export-receiver-address-additional_information.
+      move wa_doc-document_type              to wa_doc_export-document_type .
+      move wa_doc-document_type_version      to wa_doc_export-document_type_version .
+      move wa_doc-date_time_issued           to wa_doc_export-date_time_issued .
+*MOVE WA_DOC-SERVICEDELIVERYDATE        TO WA_DOC_Export-SERVICEDELIVERYDATE .
+      move wa_doc-taxpayer_activity_code     to wa_doc_export-taxpayer_activity_code .
+      move wa_doc-internal_i_d               to wa_doc_export-internal_i_d .
+      move wa_doc-purchase_order_reference   to wa_doc_export-purchase_order_reference .
+      move wa_doc-purchase_order_description to wa_doc_export-purchase_order_description .
+      move wa_doc-sales_order_reference      to wa_doc_export-sales_order_reference .
+      move wa_doc-sales_order_description    to wa_doc_export-sales_order_description .
+      move wa_doc-proforma_invoice_number    to wa_doc_export-proforma_invoice_number .
+      move wa_doc-payment                    to wa_doc_export-payment .
+      move wa_doc-delivery                   to wa_doc_export-delivery .
+      move wa_doc-total_sales_amount         to wa_doc_export-total_sales_amount .
+      move wa_doc-total_discount_amount      to wa_doc_export-total_discount_amount .
+      move wa_doc-net_amount                 to wa_doc_export-net_amount .
+      move wa_doc-tax_totals                 to wa_doc_export-tax_totals .
+      move wa_doc-extra_discount_amount      to wa_doc_export-extra_discount_amount .
+      move wa_doc-total_items_discount_amount  to wa_doc_export-total_items_discount_amount .
+      move wa_doc-total_amount                 to wa_doc_export-total_amount .
+      concatenate wa-fkdat(4) '-' wa-fkdat+4(2) '-' wa-fkdat+6(2) into wa_doc_export-servicedeliverydate.
+
+    endif.   "IF WA_DOC-DOCUMENT_TYPE = 'EI' or WA_DOC-DOCUMENT_TYPE = 'EC' or  WA_DOC-DOCUMENT_TYPE = 'ED' .
+
+
+  endif.
+  """"""""""""""""""""""""""""""""""""" new mapping """""""""""""""""""""""""""""""""""""" 6.7.2023 // end
+
+
+
+
+
+
+
+
+
+endform.
