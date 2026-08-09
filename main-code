@@ -1,0 +1,341 @@
+*&---------------------------------------------------------------------*
+*& Report ZSDL_EINV_EINVOICE
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zsdl_einv_einvoice.
+
+
+TABLES: bseg , bkpf , vbrk , vbrp .
+
+INCLUDE zsdi_einv_einvoice_top.     """"" DATA DEFINITIONS .
+INCLUDE zsdi_einv_einvoice_alv.     """""ALV SUBROUTINES.
+INCLUDE zsdi_einv_einvoice_json.    """" JSON FILE CREATION
+INCLUDE zsdi_einv_einvoice_submit.  """"" SUBMIT  Invoice.
+INCLUDE zsdi_einv_einvoice_cancel.  """"" CANCEL  Invoice.
+INCLUDE zsdi_einv_einvoice_details. """"" Details  Invoice.
+
+SELECTION-SCREEN  BEGIN OF BLOCK b1 WITH FRAME TITLE title01.
+  SELECT-OPTIONS :
+                   s_vbeln FOR vbrk-vbeln  , "NO INTERVALS
+                   s_bukrs FOR vbrk-bukrs NO INTERVALS NO-EXTENSION OBLIGATORY ,
+                   s_bldat FOR bkpf-bldat NO-EXTENSION ,
+                   s_fkart FOR vbrk-fkart NO INTERVALS,
+                   s_vkorg FOR vbrk-vkorg NO INTERVALS,
+                   s_vtweg FOR vbrk-vtweg NO INTERVALS,
+                   s_vkbur FOR vbrp-vkbur .
+  PARAMETERS : p_insub TYPE char1 AS CHECKBOX.
+SELECTION-SCREEN: END OF BLOCK b1.
+
+INITIALIZATION .
+  title01 = 'E-Invoicing add on ' .
+
+START-OF-SELECTION.
+  PERFORM get_invoices.
+  PERFORM build_fieldcat.
+  PERFORM display_alv.
+
+
+
+FORM get_invoices.
+
+  DATA : r_kunrg  TYPE RANGE OF kunnr,
+         r_kunrg2 TYPE RANGE OF kunnr.
+
+  CLEAR : r_kunrg, r_kunrg.
+
+  r_kunrg = VALUE #(
+    ( sign = 'I' option = 'EQ' low = '0000038939' )
+    ( sign = 'I' option = 'EQ' low = '0000038949' )
+    ( sign = 'I' option = 'EQ' low = '0000039755' )
+    ( sign = 'I' option = 'EQ' low = '0000039756' )
+    ).
+
+  r_kunrg2 = VALUE #(
+  ( sign = 'I' option = 'EQ' low = '0000035281' )
+  ( sign = 'I' option = 'EQ' low = '0000035282' )
+  ( sign = 'I' option = 'EQ' low = '0000036423' )
+  ).
+
+
+  SELECT DISTINCT
+    vbrk~vbeln ,
+    vbrk~bukrs ,
+    vbrk~kunrg ,
+    vbrk~waerk ,
+    vbrk~fkdat ,
+    vbrk~vbtyp ,
+    vbrk~vbtyp ,
+    vbrk~erzet,
+    vbrk~erdat AS erdat,
+    vbrk~vtweg AS vtweg,
+    vbrk~fksto ,
+    vbrk~vtweg ,
+    vbrk~fkart AS document_type,
+
+*    ktokd AS type, "MS10 does not exit
+*    stcd1 AS idnumber,"MS10 does not exit
+
+    t001~butxt ,
+
+    submissionid ,
+    uuid ,
+    status ,
+    sales_total ,
+    net_total ,
+    tax ,
+    total ,
+    created_date AS submission_date ,
+    discount ,
+    extra_discount,
+
+    kna1~name1 ,
+    kna1~land1 AS country,
+    tvfkt~vtext AS doc_desc,
+    vbfa~vbelv AS vbelv_1,
+    vbfa_k~vbelv AS vbelv_2,
+    vbpa~kunnr AS kunnr_1,
+    CASE
+      WHEN vbpa~kunnr IS INITIAL THEN vbfa_k~vbelv
+    END AS vbelv,
+    likp~kunnr AS kunnr_2,
+    CASE
+      WHEN vbpa~kunnr IS INITIAL THEN likp~kunnr
+    END AS kunnr,
+    kna1_2~land1 AS land1_2,
+    kna1_2~name1 AS name1_2,
+    kna1_2~stcd1   AS stcd1_2
+
+    FROM vbrk AS vbrk
+    INNER JOIN vbrp
+      ON vbrp~vbeln = vbrk~vbeln
+    LEFT OUTER JOIN tvfkt AS tvfkt
+      ON tvfkt~fkart = vbrk~fkart
+    LEFT OUTER JOIN vbfa AS vbfa
+      ON vbfa~vbeln = vbrk~vbeln
+        AND vbtyp_n IN ( 'M', 'O', 'P', 'O','5', 'M', 'P', 'O' )
+        AND vbtyp_v IN ( 'C', 'H', 'N', 'K', 'C', 'I', 'L', 'M' )
+    LEFT OUTER JOIN vbfa AS vbfa_k
+      ON vbfa_k~vbeln = vbrk~vbeln
+      AND vbfa_k~vbtyp_n IN ( '5' )
+      AND vbfa_k~vbtyp_v IN ( 'J' )
+    LEFT OUTER JOIN likp AS likp
+      ON likp~vbeln = vbfa_k~vbelv
+    LEFT OUTER JOIN vbpa AS vbpa
+      ON vbpa~vbeln = vbfa~vbelv AND vbpa~parvw = 'WE'
+    LEFT OUTER JOIN kna1
+      ON ( vbrk~kunrg EQ kna1~kunnr )
+    LEFT OUTER JOIN  kna1 AS kna1_2
+      ON ( vbrk~kunrg EQ kna1_2~kunnr )
+    INNER JOIN adrc
+    ON ( kna1_2~adrnr EQ adrc~addrnumber )
+    INNER JOIN t001
+      ON ( vbrk~bukrs EQ t001~bukrs )
+    LEFT OUTER JOIN zsd_inv_invoices
+      ON ( vbrk~vbeln = zsd_inv_invoices~vbeln )
+    WHERE vbrk~vbeln IN @s_vbeln
+      AND vbrk~fksto = ''
+      AND vbrk~fkart NOT IN ( 'ZS1' , 'ZS2' , 'ZS3' ,'S1' ,'S2','S3', 'IVS' )
+      AND vbrk~bukrs IN @s_bukrs
+      AND vbrk~erdat IN @s_bldat
+      AND vbrk~netwr NE 0
+      AND vbrk~fkart IN @s_fkart
+      AND vbrk~vkorg IN @s_vkorg
+      AND vbrk~vtweg IN @s_vtweg
+      AND ( vtweg <> 'CS' OR kunrg IN @r_kunrg )
+      AND ( kunrg NOT IN @r_kunrg2 OR vtweg <> '65' )
+      AND vbrp~vkbur IN @s_vkbur
+      AND ( @p_insub IS INITIAL OR status <> 'VALID'  )
+    INTO CORRESPONDING FIELDS OF TABLE @it.
+
+
+  SELECT  type AS type_cust, cust_num
+    FROM zsd_cust_numbers
+    FOR ALL ENTRIES IN @it
+    WHERE cust_num = @it-kunnr
+    INTO TABLE @DATA(lt_types).
+
+  SELECT  vbpa~vbeln,
+          vbpa~adrnr,
+          adrc~country ,
+          adrc~name1
+    FROM vbpa
+    INNER JOIN adrc
+      ON adrc~addrnumber = vbpa~adrnr
+    FOR ALL ENTRIES IN @it
+    WHERE vbeln =  @it-vbelv
+      AND parvw = 'WE'
+    INTO TABLE @DATA(lt_partner_info).
+
+  SELECT vbpa3~vbeln,
+         vbpa3~parvw,
+         vbpa3~stcd1 AS idnumber
+  FROM vbpa3
+  FOR ALL ENTRIES IN @it
+  WHERE vbeln =  @it-vbelv
+    AND parvw = 'WE'
+  INTO TABLE @DATA(lt_taxes).
+
+
+*  SELECT  kna1~land1 ,  kna1~name1 , stcd1
+*    FROM kna1
+*    INNER JOIN adrc
+*    ON ( kna1~adrnr EQ adrc~addrnumber )
+*    FOR ALL ENTRIES IN @it
+*    WHERE  kna1~kunnr = @it-kunnr
+*      and  it-vtweg = '35'
+*      and  kunnr <> 'DFZA'
+*    INTO TABLE @data(lt_partners_2).
+
+  LOOP AT it ASSIGNING FIELD-SYMBOL(<fs>).
+    READ TABLE lt_types INTO DATA(ls_type) WITH  KEY cust_num = <fs>-kunnr.
+    IF ls_type IS NOT INITIAL .
+      <fs>-type_cust = ls_type-type_cust.
+
+
+      READ TABLE lt_partner_info INTO DATA(ls_partner) WITH  KEY vbeln = <fs>-vbelv.
+      IF ls_partner IS NOT INITIAL .
+        <fs>-country = ls_partner-country.
+        <fs>-name1 = ls_partner-name1.
+      ENDIF.
+
+      READ TABLE lt_taxes INTO DATA(ls_tax) WITH  KEY vbeln = <fs>-vbelv.
+      IF ls_tax IS NOT INITIAL .
+        <fs>-idnumber = ls_tax-idnumber.
+      ENDIF.
+
+    ELSEIF <fs>-vtweg = '35' AND <fs>-kunnr <> 'DFZA'.
+      <fs>-country = <fs>-land1_2.
+      <fs>-name1 = <fs>-name1_2.
+      <fs>-idnumber = <fs>-stcd1_2.
+
+      IF <fs>-idnumber IS INITIAL.
+        <fs>-idnumber = '999999999'.
+      ENDIF.
+*    ENDIF.
+
+    ELSEIF  <fs>-vtweg = '10' .
+      <fs>-idnumber = '999999999'.
+    ENDIF.
+
+    TRANSLATE <fs>-status TO UPPER CASE.
+    IF <fs>-status = 'VALID'.
+      <fs>-icon_d = icon_led_green.
+    ELSEIF <fs>-status = 'INVALID'.
+      <fs>-icon_d = icon_led_yellow.
+    ELSEIF <fs>-status = 'TOKEN' OR <fs>-status = 'VALIDATION ERROR'.
+      <fs>-icon_d = icon_led_red.
+    ELSEIF <fs>-status = 'CANCEL'.
+      <fs>-icon_d            = icon_cancel.
+    ENDIF.
+    CLEAR: ls_type, ls_partner, ls_tax.
+  ENDLOOP.
+
+  CLEAR: lt_partner_info, lt_types, lt_taxes.
+*  SELECT SINGLE stcd1 FROM vbpa3 INTO wa-idnumber WHERE vbeln =  wa-vbelv AND  parvw = 'WE'.
+*  SELECT SINGLE adrnr FROM vbpa INTO l_adrnr_temp WHERE vbeln = wa-vbelv AND parvw = 'WE'.
+*  SELECT SINGLE  country , name1 FROM adrc INTO ( @wa-country , @wa-name1 ) WHERE addrnumber = @l_adrnr_temp.
+
+*delete it WHERE VTWEG = 'CS' and KUNRG not in R_KUNRG .
+*  DELETE it WHERE kunrg IN r_kunrg2 AND vtweg = '65' .
+
+*  LOOP AT it INTO wa .
+**    wa-document_type = wa-fkart .
+**    SELECT SINGLE vtext FROM tvfkt INTO wa-doc_desc WHERE fkart = wa-fkart.
+*
+*    CLEAR: l_vbelv_temp, l_kunnr_temp,ls_cust_numbers-type   .
+*
+**SELECT SINGLE VBELV FROM VBFA INTO L_vbelv_temp  WHERE VBELN = wa-VBELN and VBTYP_N = 'M' and VBTYP_V = 'C'. " 17-12-2022
+**    SELECT SINGLE VBELV FROM VBFA INTO WA-VBELV  WHERE VBELN = WA-VBELN
+**      AND VBTYP_N = 'M' AND VBTYP_V = 'C'. " 17-12-2022
+*    """""""""""""""""""""""""""""""""""""""""""""""""""" 17.02.2023
+**    SELECT SINGLE vbelv FROM vbfa INTO wa-vbelv  WHERE vbeln = wa-vbeln
+**    AND ( ( vbtyp_n = 'M' AND vbtyp_v = 'C' ) OR
+**          ( vbtyp_n = 'O' AND vbtyp_v = 'H' ) OR
+**          ( vbtyp_n = 'P' AND vbtyp_v = 'N' ) OR
+**          ( vbtyp_n = 'O' AND vbtyp_v = 'K' ) OR
+**          ( vbtyp_n = '5' AND vbtyp_v = 'C' ) OR
+**          ( vbtyp_n = 'M' AND vbtyp_v = 'I' ) OR
+**          ( vbtyp_n = 'P' AND vbtyp_v = 'L' ) OR
+**          ( vbtyp_n = 'O' AND vbtyp_v = 'M' )
+**        ).
+*
+**    SELECT SINGLE kunnr FROM vbpa INTO l_kunnr_temp WHERE vbeln = wa-vbelv AND parvw = 'WE'. " 17-12-2022
+*    """""""""""""""""""""""""""""""""""""""""""""""""""""""
+**    IF l_kunnr_temp IS INITIAL. " MM
+**      SELECT  SINGLE vbelv
+**       FROM vbfa
+**       INTO wa-vbelv
+**       WHERE vbtyp_n = '5' AND vbtyp_v = 'J' AND  vbeln = wa-vbeln.
+**
+**      SELECT SINGLE kunnr
+**       FROM likp
+**       INTO l_kunnr_temp
+**       WHERE vbeln = wa-vbelv.
+**    ENDIF.
+*    """"""""""""""""""""""""""""""""""""""""""""""""""""""
+*
+*    SELECT SINGLE type FROM zsd_cust_numbers INTO ls_cust_numbers-type WHERE cust_num = l_kunnr_temp.
+*
+*    """""""""""""""""""""""""""""""""""""""""""""""""""""17.02.2023
+**---------------------------------09-01-2023-----------------------------------*
+**SELECT SINGLE KTOKD FROM KNA1 INTO wa-type WHERE KUNNR = L_KUNNR_temp . " 17-12-2022
+*    IF ls_cust_numbers-type IS NOT INITIAL .
+*      CLEAR: l_adrnr_temp, wa-country , wa-name1 , wa-idnumber.
+*      SELECT SINGLE stcd1 FROM vbpa3 INTO wa-idnumber WHERE vbeln =  wa-vbelv AND  parvw = 'WE'.
+*      SELECT SINGLE adrnr FROM vbpa INTO l_adrnr_temp WHERE vbeln = wa-vbelv AND parvw = 'WE'.
+*      SELECT SINGLE  country , name1 FROM adrc INTO ( @wa-country , @wa-name1 ) WHERE addrnumber = @l_adrnr_temp.
+**    ELSEIF  WA-VTWEG = '35' and L_KUNNR_TEMP <> 'DFZA' .
+*    ELSEIF  wa-vtweg = '35' AND l_kunnr_temp <> 'DFZA' AND l_kunnr_temp IS NOT INITIAL.
+*      CLEAR: l_adrnr_temp, wa-country , wa-name1 , wa-idnumber.
+**
+**      SELECT SINGLE STCD1 FROM VBPA3 INTO WA-IDNUMBER WHERE VBELN =  WA-VBELV AND  PARVW = 'WE'.
+**      SELECT SINGLE ADRNR FROM VBPA INTO L_ADRNR_TEMP WHERE VBELN = WA-VBELV AND PARVW = 'WE'.
+**      SELECT SINGLE  COUNTRY , NAME1 FROM ADRC INTO ( @WA-COUNTRY , @WA-NAME1 ) WHERE ADDRNUMBER = @L_ADRNR_TEMP.
+*
+*      SELECT SINGLE kna1~land1 ,  kna1~name1 , stcd1
+*       FROM kna1
+*       INNER JOIN adrc
+*       ON ( kna1~adrnr EQ adrc~addrnumber )
+*       INTO (  @wa-country  ,@wa-name1 , @wa-idnumber   )
+*       WHERE  kna1~kunnr = @l_kunnr_temp  .
+*      IF wa-idnumber IS INITIAL.
+*        wa-idnumber = '999999999'.
+*      ENDIF.
+*    ELSEIF  wa-vtweg = '10' .
+*      wa-idnumber = '999999999'.
+*    ENDIF.
+*
+*
+*
+*    MODIFY it FROM wa.
+*    CLEAR wa.
+*  ENDLOOP.
+*
+*
+*
+*
+*  SORT it[] BY vbeln .
+*  DELETE ADJACENT DUPLICATES FROM it[] COMPARING ALL FIELDS.
+*  IF p_insub IS NOT INITIAL.
+*    DELETE it WHERE status = 'VALID'.
+*  ENDIF.
+*
+*  "TRAFFIC LIGHTS
+*  LOOP AT it INTO wa.
+*    TRANSLATE wa-status TO UPPER CASE.
+*    IF wa-status = 'VALID'.
+*      wa-icon_d = icon_led_green.
+*    ELSEIF wa-status = 'INVALID'.
+*      wa-icon_d = icon_led_yellow.
+*    ELSEIF wa-status = 'TOKEN' OR wa-status = 'VALIDATION ERROR'.
+*      wa-icon_d = icon_led_red.
+*    ELSEIF wa-status = 'CANCEL'.
+*      wa-icon_d            = icon_cancel.
+*    ENDIF.
+**    if P_FKDAT is not INITIAL. " esraa added to change posting date  " commented by mosbah
+**      wa-fkdat = P_FKDAT.
+**     ENDIF.
+*    MODIFY it FROM wa TRANSPORTING icon_d fkdat .
+*  ENDLOOP.
+ENDFORM.
