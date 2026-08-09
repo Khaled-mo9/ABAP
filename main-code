@@ -42,7 +42,7 @@ FORM get_invoices.
   DATA : r_kunrg  TYPE RANGE OF kunnr,
          r_kunrg2 TYPE RANGE OF kunnr.
 
-  CLEAR : r_kunrg, r_kunrg.
+  CLEAR : r_kunrg, r_kunrg2.
 
   r_kunrg = VALUE #(
     ( sign = 'I' option = 'EQ' low = '0000038939' )
@@ -65,12 +65,10 @@ FORM get_invoices.
     vbrk~waerk ,
     vbrk~fkdat ,
     vbrk~vbtyp ,
-    vbrk~vbtyp ,
     vbrk~erzet,
     vbrk~erdat AS erdat,
     vbrk~vtweg AS vtweg,
     vbrk~fksto ,
-    vbrk~vtweg ,
     vbrk~fkart AS document_type,
 
 *    ktokd AS type, "MS10 does not exit
@@ -95,13 +93,17 @@ FORM get_invoices.
     vbfa~vbelv AS vbelv_1,
     vbfa_k~vbelv AS vbelv_2,
     vbpa~kunnr AS kunnr_1,
+
     CASE
-      WHEN vbpa~kunnr IS INITIAL THEN vbfa_k~vbelv
+      WHEN vbpa~kunnr IS INITIAL THEN likp~kunnr ELSE vbpa~kunnr
+    END AS kunnr,
+
+    CASE
+      WHEN vbpa~kunnr IS INITIAL THEN vbfa_k~vbelv else vbfa~vbelv
     END AS vbelv,
     likp~kunnr AS kunnr_2,
-    CASE
-      WHEN vbpa~kunnr IS INITIAL THEN likp~kunnr
-    END AS kunnr,
+
+
     kna1_2~land1 AS land1_2,
     kna1_2~name1 AS name1_2,
     kna1_2~stcd1   AS stcd1_2
@@ -110,7 +112,7 @@ FORM get_invoices.
     INNER JOIN vbrp
       ON vbrp~vbeln = vbrk~vbeln
     LEFT OUTER JOIN tvfkt AS tvfkt
-      ON tvfkt~fkart = vbrk~fkart
+      ON tvfkt~fkart = vbrk~fkart and tvfkt~spras = @sy-langu
     LEFT OUTER JOIN vbfa AS vbfa
       ON vbfa~vbeln = vbrk~vbeln
         AND vbtyp_n IN ( 'M', 'O', 'P', 'O','5', 'M', 'P', 'O' )
@@ -127,9 +129,9 @@ FORM get_invoices.
       ON ( vbrk~kunrg EQ kna1~kunnr )
     LEFT OUTER JOIN  kna1 AS kna1_2
       ON ( vbrk~kunrg EQ kna1_2~kunnr )
-    INNER JOIN adrc
+    LEFT JOIN adrc
     ON ( kna1_2~adrnr EQ adrc~addrnumber )
-    INNER JOIN t001
+    LEFT JOIN t001
       ON ( vbrk~bukrs EQ t001~bukrs )
     LEFT OUTER JOIN zsd_inv_invoices
       ON ( vbrk~vbeln = zsd_inv_invoices~vbeln )
@@ -148,6 +150,9 @@ FORM get_invoices.
       AND ( @p_insub IS INITIAL OR status <> 'VALID'  )
     INTO CORRESPONDING FIELDS OF TABLE @it.
 
+
+  SORT it[] by vbeln.
+  delete ADJACENT DUPLICATES FROM it[] COMPARING vbeln.
 
   SELECT  type AS type_cust, cust_num
     FROM zsd_cust_numbers
